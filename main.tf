@@ -1,74 +1,143 @@
-# Set the Azure Provider source and version being used
+# Configure the Azure provider
 terraform {
-  required_version = ">= 0.14"
-
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.1.0"
+      version = "~> 3.0.2"
     }
   }
+
+  required_version = ">= 1.1.0"
 }
 
-# Configure the Microsoft Azure provider
 provider "azurerm" {
   features {}
 }
 
-# Create a Resource Group if it doesn’t exist
-resource "azurerm_resource_group" "tfexample" {
-  name     = "my-terraform-rg"
-  location = "West Europe"
+resource "random_pet" "rg-name" {
+  prefix = var.resource_group_name_prefix
 }
 
-# Create a Virtual Network
-resource "azurerm_virtual_network" "tfexample" {
-  name                = "my-terraform-vnet"
-  location            = azurerm_resource_group.tfexample.location
-  resource_group_name = azurerm_resource_group.tfexample.name
-  address_space       = ["10.0.0.0/16"]
+resource "azurerm_resource_group" "rg" {
+  name     = random_pet.rg-name.id
+  location = var.resource_group_location
+}
 
-  tags = {
-    environment = "my-terraform-env"
+# Create virtual network
+resource "azurerm_virtual_network" "myterraformnetwork" {
+  name                = "myVnet"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+# Create subnet
+resource "azurerm_subnet" "myterraformsubnet" {
+  name                 = "mySubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.myterraformnetwork.name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+# Create public IPs
+resource "azurerm_public_ip" "myterraformpublicip" {
+  name                = "myPublicIP"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Dynamic"
+}
+
+# Create Network Security Group and rule
+resource "azurerm_network_security_group" "myterraformnsg" {
+  name                = "myNetworkSecurityGroup"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  security_rule {
+    name                       = "SSH"
+    priority                   = 1001
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "HTTP"
+    priority                   = 1002
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
   }
 }
 
-# Create a Subnet in the Virtual Network
-resource "azurerm_subnet" "tfexample" {
-  name                 = "my-terraform-subnet"
-  resource_group_name  = azurerm_resource_group.tfexample.name
-  virtual_network_name = azurerm_virtual_network.tfexample.name
-  address_prefixes     = ["10.0.2.0/24"]
-}
-
-# Create a Network Interface
-resource "azurerm_network_interface" "tfexample" {
-  name                = "my-terraform-nic"
-  location            = azurerm_resource_group.tfexample.location
-  resource_group_name = azurerm_resource_group.tfexample.name
+# Create network interface
+resource "azurerm_network_interface" "myterraformnic" {
+  name                = "myNIC"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
 
   ip_configuration {
-    name                          = "my-terraform-nic-ip-config"
-    subnet_id                     = azurerm_subnet.tfexample.id
+    name                          = "myNicConfiguration"
+    subnet_id                     = azurerm_subnet.myterraformsubnet.id
     private_ip_address_allocation = "Dynamic"
-  }
-
-  tags = {
-    environment = "my-terraform-env"
+    public_ip_address_id          = azurerm_public_ip.myterraformpublicip.id
   }
 }
 
-# Create a Virtual Machine
-resource "azurerm_linux_virtual_machine" "tfexample" {
-  name                            = "my-terraform-vm"
-  location                        = azurerm_resource_group.tfexample.location
-  resource_group_name             = azurerm_resource_group.tfexample.name
-  network_interface_ids           = [azurerm_network_interface.tfexample.id]
-  size                            = "Standard_DS1_v2"
-  computer_name                   = "myvm"
-  admin_username                  = "azureuser"
-  admin_password                  = "Password1234!"
-  disable_password_authentication = false
+# Connect the security group to the network interface
+resource "azurerm_network_interface_security_group_association" "example" {
+  network_interface_id      = azurerm_network_interface.myterraformnic.id
+  network_security_group_id = azurerm_network_security_group.myterraformnsg.id
+}
+
+# Generate random text for a unique storage account name
+resource "random_id" "randomId" {
+  keepers = {
+    # Generate a new ID only when a new resource group is defined
+    resource_group = azurerm_resource_group.rg.name
+  }
+
+  byte_length = 8
+}
+
+# Create storage account for boot diagnostics
+resource "azurerm_storage_account" "mystorageaccount" {
+  name                     = "diag${random_id.randomId.hex}"
+  location                 = azurerm_resource_group.rg.location
+  resource_group_name      = azurerm_resource_group.rg.name
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+# Create (and display) an SSH key
+resource "tls_private_key" "example_ssh" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+# Create virtual machine
+resource "azurerm_linux_virtual_machine" "myterraformvm" {
+  name                  = "${var.prefix}-myVM"
+  location              = azurerm_resource_group.rg.location
+  resource_group_name   = azurerm_resource_group.rg.name
+  network_interface_ids = [azurerm_network_interface.myterraformnic.id]
+  size                  = "Standard_B1s"
+
+  custom_data = filebase64("user-data-httpd.sh")
+
+  os_disk {
+    name                 = "myOsDisk"
+    caching              = "ReadWrite"
+    storage_account_type = "Premium_LRS"
+  }
 
   source_image_reference {
     publisher = "Canonical"
@@ -77,13 +146,16 @@ resource "azurerm_linux_virtual_machine" "tfexample" {
     version   = "latest"
   }
 
-  os_disk {
-    name                 = "my-terraform-os-disk"
-    storage_account_type = "Standard_LRS"
-    caching              = "ReadWrite"
+  computer_name                   = "${var.prefix}-myvm"
+  admin_username                  = "azureuser"
+  disable_password_authentication = true
+
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = tls_private_key.example_ssh.public_key_openssh
   }
 
-  tags = {
-    environment = "my-terraform-env"
+  boot_diagnostics {
+    storage_account_uri = azurerm_storage_account.mystorageaccount.primary_blob_endpoint
   }
 }
