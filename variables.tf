@@ -16,3 +16,4 @@ variable "resource_group_location" {
 ## add local
 ## add
 ## 1
+## disable
