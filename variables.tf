@@ -12,3 +12,4 @@ variable "resource_group_location" {
   default     = "koreacentral"
   description = "Location of the resource group."
 }
+## Test
